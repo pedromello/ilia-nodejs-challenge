@@ -1,0 +1,34 @@
+services:
+
+  # Users Microservice ------------
+  users-microservice:
+    build:
+      context: ./users-microservice
+      dockerfile: Dockerfile
+    ports:
+      - "3002:3002"
+    env_file:
+      - ./users-microservice/.env.development
+    depends_on:
+      - users-db
+    networks:
+      - users-microservice
+    volumes:
+      - ./users-microservice:/usr/src/app
+      - /usr/src/app/node_modules
+      - /usr/src/app/src/generated
+    command: sh -c "npx prisma generate && npm run start:dev"
+  users-db:
+    image: postgres:16.0-alpine3.18
+    env_file:
+      - ./users-microservice/.env.development
+    ports:
+      - "6432:5432"
+    networks:
+      - users-microservice
+    volumes:
+      - ./users-microservice/prisma/migrations:/usr/src/app/prisma/migrations
+
+networks:
+  users-microservice:
+    driver: bridge
