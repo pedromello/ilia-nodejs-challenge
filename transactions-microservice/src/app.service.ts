@@ -1,17 +1,30 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from './prisma.service';
+import { AppRepository } from './app.repository';
+
+export interface AppStatusInfo {
+  updated_at: string;
+  dependencies: {
+    database: {
+      version: string;
+      max_connections: number;
+      open_connections: number;
+    };
+  };
+}
 
 @Injectable()
 export class AppService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly appRepository: AppRepository) { }
+  async getAppStatusInfo(): Promise<AppStatusInfo> {
+    const updatedAt = new Date().toISOString();
 
-  getHello(): string {
-    return 'Hello World!';
-  }
+    const databaseStatus = await this.appRepository.getDatabaseStatus();
 
-  async testConnection(): Promise<string> {
-
-    const foo = await this.prisma.$queryRaw<string[]>`SELECT 1+1`;
-    return foo[0];
+    return {
+      updated_at: updatedAt,
+      dependencies: {
+        database: databaseStatus.database,
+      },
+    };
   }
 }
