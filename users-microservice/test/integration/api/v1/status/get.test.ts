@@ -8,7 +8,7 @@ describe('AppController', () => {
     describe('GET /api/v1/status', () => {
         it('Should return 200', async () => {
             const response = await fetch("http://localhost:3002/api/v1/status");
-            expect(response.status).toBe(209);
+            expect(response.status).toBe(200);
         });
 
         it("Should return correct information", async () => {
