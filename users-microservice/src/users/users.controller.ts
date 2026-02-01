@@ -8,6 +8,8 @@ import {
     Delete,
     UseGuards,
     ValidationPipe,
+    Req,
+    UnauthorizedException,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -31,8 +33,8 @@ export class UsersController {
 
     @UseGuards(JwtAuthGuard)
     @Get(':id')
-    findOne(@Param('id') id: string) {
-        return this.usersService.findOne(id);
+    findOne(@Param('id') id: string, @Req() req: any) {
+        return this.usersService.findOne(id, req.user.userId);
     }
 
     @UseGuards(JwtAuthGuard)
@@ -40,13 +42,14 @@ export class UsersController {
     update(
         @Param('id') id: string,
         @Body(ValidationPipe) updateUserDto: UpdateUserDto,
+        @Req() req: any,
     ) {
-        return this.usersService.update(id, updateUserDto);
+        return this.usersService.update(id, updateUserDto, req.user.userId);
     }
 
     @UseGuards(JwtAuthGuard)
     @Delete(':id')
-    remove(@Param('id') id: string) {
-        return this.usersService.remove(id);
+    remove(@Param('id') id: string, @Req() req: any) {
+        return this.usersService.remove(id, req.user.userId);
     }
 }

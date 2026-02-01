@@ -11,7 +11,7 @@ import { UsersModule } from '../users/users.module';
     UsersModule,
     PassportModule,
     JwtModule.register({
-      secret: process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production-52f8a3e7b9c4d1e6',
+      secret: process.env.JWT_SECRET || 'ILIACHALLENGE',
       signOptions: { expiresIn: '1h' },
     }),
   ],

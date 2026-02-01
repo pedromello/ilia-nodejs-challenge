@@ -2,6 +2,7 @@ import {
     Injectable,
     ConflictException,
     NotFoundException,
+    UnauthorizedException,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { UsersRepository } from './users.repository';
@@ -40,7 +41,12 @@ export class UsersService {
         return users.map((user) => this.toResponseDto(user));
     }
 
-    async findOne(id: string): Promise<UserResponseDto> {
+    async findOne(id: string, requesterId?: string): Promise<UserResponseDto> {
+        if (requesterId && requesterId !== id) {
+            throw new UnauthorizedException(
+                'You are not authorized to access this user information',
+            );
+        }
         const user = await this.usersRepository.findById(id);
         if (!user) {
             throw new NotFoundException('User not found');
@@ -59,7 +65,13 @@ export class UsersService {
     async update(
         id: string,
         updateUserDto: UpdateUserDto,
+        requesterId?: string,
     ): Promise<UserResponseDto> {
+        if (requesterId && requesterId !== id) {
+            throw new UnauthorizedException(
+                'You are not authorized to update this user',
+            );
+        }
         // Validar se usuário existe
         const user = await this.usersRepository.findById(id);
         if (!user) {
@@ -81,7 +93,12 @@ export class UsersService {
         return this.toResponseDto(updatedUser);
     }
 
-    async remove(id: string): Promise<void> {
+    async remove(id: string, requesterId?: string): Promise<void> {
+        if (requesterId && requesterId !== id) {
+            throw new UnauthorizedException(
+                'You are not authorized to delete this user',
+            );
+        }
         // Validar se usuário existe
         const user = await this.usersRepository.findById(id);
         if (!user) {
