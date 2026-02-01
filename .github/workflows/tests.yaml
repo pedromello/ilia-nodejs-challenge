@@ -18,6 +18,8 @@ jobs:
 
       - run: npm ci
 
+      - run: npm run prisma:generate
+
       - run: npm test
 
   users-tests:
@@ -34,5 +36,7 @@ jobs:
           node-version: 24
 
       - run: npm ci
+
+      - run: npm run prisma:generate
 
       - run: npm test
