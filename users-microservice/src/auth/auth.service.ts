@@ -47,4 +47,18 @@ export class AuthService {
             access_token,
         };
     }
+
+    async validateUserJwt(token: string): Promise<{ valid: boolean; userId?: string }> {
+        try {
+            const payload = await this.jwtService.verifyAsync(token);
+            return {
+                valid: true,
+                userId: payload.sub,
+            };
+        } catch (error) {
+            return {
+                valid: false,
+            };
+        }
+    }
 }
