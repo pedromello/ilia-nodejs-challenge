@@ -1,3 +1,9 @@
+import orchestrator from "test/orchestrator.js";
+
+beforeAll(async () => {
+    await orchestrator.waitForAllServices();
+});
+
 describe('AppController', () => {
     describe('GET /api/v1/status', () => {
         it('Should return 200', async () => {
