@@ -1,0 +1,18 @@
+import { Controller, Post, Body, UseGuards } from '@nestjs/common';
+import { AuthService } from './auth.service';
+import { InternalJwtAuthGuard } from './guards/internal-jwt-auth.guard';
+
+@Controller('auth')
+export class AuthController {
+    constructor(private readonly authService: AuthService) { }
+
+    @UseGuards(InternalJwtAuthGuard)
+    @Post('validate-user-jwt')
+    async validateUserJwt(@Body('user_token') userToken: string) {
+        const result = await this.authService.validateUserJwt(userToken);
+        return {
+            valid: result.valid,
+            user_id: result.userId,
+        };
+    }
+}

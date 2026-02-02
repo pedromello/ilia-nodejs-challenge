@@ -13,3 +13,46 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+// Immutable transaction ledger - append-only, source of truth
+model Transaction {
+  id             String          @id @default(cuid())
+  userId         String          @map("user_id")
+  type           TransactionType
+  amount         Int // Amount in cents to avoid floating point issues
+  idempotencyKey String?         @map("idempotency_key")
+  createdAt      DateTime        @default(now()) @map("created_at")
+
+  @@index([userId, type, createdAt], name: "idx_transactions_user_type_date")
+  @@index([idempotencyKey], name: "idx_transactions_idempotency")
+  @@map("transactions")
+}
+
+// Account balance snapshot - updated atomically with transactions
+model Account {
+  id        String   @id @default(cuid())
+  userId    String   @unique @map("user_id")
+  balance   Int      @default(0) // Current balance in cents
+  version   Int      @default(0) // For optimistic locking
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("accounts")
+}
+
+// Idempotency key storage for duplicate request prevention
+model IdempotencyKey {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  response  String // JSON-serialized response
+  createdAt DateTime @default(now()) @map("created_at")
+  expiresAt DateTime @map("expires_at")
+
+  @@index([expiresAt], name: "idx_idempotency_expires")
+  @@map("idempotency_keys")
+}
+
+enum TransactionType {
+  CREDIT
+  DEBIT
+}
