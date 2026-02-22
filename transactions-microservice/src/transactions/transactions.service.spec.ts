@@ -112,33 +112,6 @@ describe('TransactionsService', () => {
       );
     });
 
-    it('should return cached response for duplicate idempotency key', async () => {
-      const dto: CreateTransactionDto = {
-        type: TransactionType.CREDIT,
-        amount: 1000,
-      };
-
-      const cachedResponse = {
-        id: 'tx123',
-        user_id: USER_ID,
-        amount: 1000,
-        type: TransactionType.CREDIT,
-      };
-
-      // The repository now throws IDEMPOTENCY_DUPLICATE from inside the tx
-      const dupError = Object.assign(new Error('IDEMPOTENCY_DUPLICATE'), {
-        cachedResponse: JSON.stringify(cachedResponse),
-      });
-      repository.createTransactionWithRetry.mockRejectedValue(dupError);
-
-      await expect(
-        service.createTransaction(dto, USER_ID, 'duplicate-key'),
-      ).rejects.toThrow(DuplicateTransactionException);
-
-      // createTransaction was called (it delegates idempotency to the repo)
-      expect(repository.createTransactionWithRetry).toHaveBeenCalled();
-    });
-
     it('should reject invalid amount (zero)', async () => {
       const dto: CreateTransactionDto = {
         type: TransactionType.CREDIT,

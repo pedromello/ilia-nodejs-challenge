@@ -8,7 +8,7 @@ export class InternalJwtStrategy extends PassportStrategy(Strategy, 'jwt-interna
         super({
             jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
             ignoreExpiration: false,
-            secretOrKey: process.env.INTERNAL_JWT_SECRET,
+            secretOrKey: process.env.INTERNAL_JWT_SECRET || 'ILIACHALLENGE_INTERNAL',
         });
     }
 
