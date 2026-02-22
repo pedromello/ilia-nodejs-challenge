@@ -13,15 +13,15 @@
     "start:debug": "nest start --debug --watch --env-file=.env.development",
     "start:prod": "node dist/main",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
-    "test": "npm run services:up && jest",
-    "test:watch": "npm run services:up && jest --watch",
-    "test:cov": "npm run services:up && jest --coverage",
+    "test": "npm run services:up && jest --runInBand --forceExit",
+    "test:watch": "npm run services:up && jest --runInBand --watch",
+    "test:cov": "npm run services:up && jest --runInBand --coverage",
     "test:debug": "npm run services:up && node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "services:up": "docker compose up -d",
     "services:down": "docker compose down",
     "services:stop": "docker compose stop",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev --name init",
+    "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio"
   },
   "dependencies": {
@@ -85,6 +85,9 @@
     ],
     "coverageDirectory": "./coverage",
     "testEnvironment": "node",
-    "testTimeout": 60000
+    "testTimeout": 60000,
+    "moduleNameMapper": {
+      "^src/(.*)$": "<rootDir>/src/$1"
+    }
   }
 }

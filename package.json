@@ -1,0 +1,7 @@
+{
+    "name": "ilia-nodejs-challenge",
+    "private": true,
+    "scripts": {
+        "test:e2e": "docker compose up -d && cd e2e && npm install && npm test"
+    }
+}
