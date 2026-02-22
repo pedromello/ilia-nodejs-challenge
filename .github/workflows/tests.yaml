@@ -11,7 +11,7 @@ jobs:
         working-directory: transactions-microservice
     steps:
       - uses: actions/checkout@v4
-        
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -30,7 +30,7 @@ jobs:
         working-directory: users-microservice
     steps:
       - uses: actions/checkout@v4
-        
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -40,3 +40,23 @@ jobs:
       - run: npm run prisma:generate
 
       - run: npm test
+
+  e2e-tests:
+    name: E2E Cross-Service Tests
+    runs-on: ubuntu-latest
+    # Run only after both microservice test suites pass
+    needs: [transactions-tests, users-tests]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+
+      # Always dump service logs on failure to aid debugging
+      - name: Dump service logs on failure
+        if: failure()
+        run: docker compose logs
