@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import {
     TransactionsRepository,
     CreateTransactionParams,
-    TransactionResult,
 } from './transactions.repository';
 import {
     CreateTransactionDto,
@@ -23,41 +22,27 @@ export class TransactionsService {
     constructor(private readonly repository: TransactionsRepository) { }
 
     /**
-     * Create a new transaction with idempotency support
+     * Create a new transaction with idempotency support.
      */
     async createTransaction(
         dto: CreateTransactionDto,
+        userId: string,
         idempotencyKey?: string,
     ): Promise<TransactionResponseDto> {
-        // Step 1: Check idempotency key if provided
-        if (idempotencyKey) {
-            const cachedResponse = await this.repository.checkIdempotencyKey(
-                idempotencyKey,
-            );
-            if (cachedResponse) {
-                const parsed = JSON.parse(cachedResponse);
-                this.logger.log(
-                    `Returning cached response for idempotency key: ${idempotencyKey}`,
-                );
-                throw new DuplicateTransactionException(idempotencyKey, parsed);
-            }
-        }
-
-        // Step 2: Validate amount
+        // Validate amount
         if (dto.amount <= 0) {
             throw new InvalidAmountException(dto.amount);
         }
 
-        // Step 3: Create transaction with locking
         try {
             const params: CreateTransactionParams = {
-                userId: dto.user_id,
+                userId,
                 type: dto.type,
                 amount: dto.amount,
                 idempotencyKey,
             };
 
-            const transaction = await this.repository.createTransactionWithLock(params);
+            const transaction = await this.repository.createTransactionWithRetry(params);
 
             const response: TransactionResponseDto = {
                 id: transaction.id,
@@ -66,28 +51,33 @@ export class TransactionsService {
                 type: transaction.type,
             };
 
-            // Step 4: Store idempotency key with response
-            if (idempotencyKey) {
-                await this.repository.storeIdempotencyKey(idempotencyKey, response);
-            }
-
             this.logger.log(
-                `Transaction created successfully: ${transaction.id} for user ${dto.user_id}`,
+                `Transaction created successfully: ${transaction.id} for user ${userId}`,
             );
 
             return response;
         } catch (error) {
+            if (error.message === 'IDEMPOTENCY_DUPLICATE') {
+                // Idempotency duplicate detected inside the DB transaction
+                const parsed = JSON.parse(error.cachedResponse);
+                this.logger.log(
+                    `[IDEMPOTENCY_DUPLICATE] Returning cached response for idempotency key: ${idempotencyKey}`,
+                );
+                // Return the cached response instead of throwing an exception
+                return parsed;
+            }
+
             if (error.message === 'INSUFFICIENT_BALANCE') {
-                const currentBalance = await this.repository.getBalance(dto.user_id);
+                const currentBalance = await this.repository.getBalance(userId);
                 throw new InsufficientBalanceException(
-                    dto.user_id,
+                    userId,
                     currentBalance,
                     dto.amount,
                 );
             }
 
             this.logger.error(
-                `Failed to create transaction for user ${dto.user_id}: ${error.message}`,
+                `Failed to create transaction for user ${userId}: ${error.message}`,
                 error.stack,
             );
             throw error;

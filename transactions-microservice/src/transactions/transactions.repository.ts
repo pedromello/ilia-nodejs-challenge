@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../infra/prisma.service';
-import { TransactionType } from './dto';
+import { PrismaService } from 'src/infra/prisma.service';
 import { Prisma } from '../generated/prisma/client';
+import { TransactionType } from './dto';
 
 export interface CreateTransactionParams {
     userId: string;
@@ -21,6 +21,7 @@ export interface TransactionResult {
 @Injectable()
 export class TransactionsRepository {
     private readonly logger = new Logger(TransactionsRepository.name);
+
     constructor(private readonly prisma: PrismaService) { }
 
     /**
@@ -34,8 +35,41 @@ export class TransactionsRepository {
 
         return this.prisma.$transaction(
             async (tx) => {
+                // Step 0: Atomic idempotency guard
+                // Strategy: INSERT the idempotency key as a placeholder at the very
+                // beginning of the transaction. Two concurrent transactions with the
+                // same key will both try to INSERT — the second one hits the DB UNIQUE
+                // constraint and the entire transaction aborts before touching money.
+                if (idempotencyKey) {
+                    // First check for an already-completed entry (non-racing duplicate)
+                    const existing = await tx.idempotencyKey.findUnique({
+                        where: { key: idempotencyKey },
+                        select: { response: true, expiresAt: true },
+                    });
+
+                    if (existing && existing.expiresAt > new Date()) {
+                        // Completed key found — signal duplicate to the service layer
+                        throw Object.assign(new Error('IDEMPOTENCY_DUPLICATE'), {
+                            cachedResponse: existing.response,
+                        });
+                    }
+
+                    // Reserve the key with a placeholder BEFORE touching money.
+                    // If two concurrent TXs both saw null above, one will win the
+                    // INSERT and the other will hit P2002 here, aborting its TX.
+                    const ninetyDaysFromNow = new Date();
+                    ninetyDaysFromNow.setDate(ninetyDaysFromNow.getDate() + 90);
+
+                    await tx.idempotencyKey.create({
+                        data: {
+                            key: idempotencyKey,
+                            response: '__PENDING__',
+                            expiresAt: ninetyDaysFromNow,
+                        },
+                    });
+                }
+
                 // Step 1: Lock the account row using SELECT FOR UPDATE
-                // This prevents concurrent transactions from reading stale balance
                 const account = await tx.$queryRaw<Array<{ id: string; balance: number; version: number }>>`
           SELECT id, balance, version 
           FROM accounts 
@@ -67,12 +101,7 @@ export class TransactionsRepository {
 
                 // Step 3: Create transaction record (immutable ledger)
                 const transaction = await tx.transaction.create({
-                    data: {
-                        userId,
-                        type,
-                        amount,
-                        idempotencyKey,
-                    },
+                    data: { userId, type, amount, idempotencyKey },
                 });
 
                 // Step 4: Update or create account balance atomically
@@ -80,18 +109,30 @@ export class TransactionsRepository {
                     // Update existing account with version increment
                     await tx.account.update({
                         where: { id: accountId },
-                        data: {
-                            balance: newBalance,
-                            version: currentVersion + 1,
-                        },
+                        data: { balance: newBalance, version: currentVersion + 1 },
                     });
                 } else {
                     // Create new account for first-time user
                     await tx.account.create({
+                        data: { userId, balance: newBalance, version: 1 },
+                    });
+                }
+
+                // Step 5: Update idempotency key with response data
+                if (idempotencyKey) {
+                    const expiresAt = new Date();
+                    expiresAt.setHours(expiresAt.getHours() + 24);
+
+                    await tx.idempotencyKey.update({
+                        where: { key: idempotencyKey },
                         data: {
-                            userId,
-                            balance: newBalance,
-                            version: 1,
+                            response: JSON.stringify({
+                                id: transaction.id,
+                                user_id: userId,
+                                amount: transaction.amount,
+                                type: transaction.type,
+                            }),
+                            expiresAt,
                         },
                     });
                 }
@@ -117,6 +158,41 @@ export class TransactionsRepository {
     }
 
     /**
+     * Wraps createTransactionWithLock with retry logic for serialization failures.
+     * PostgreSQL Serializable isolation can abort transactions with error code 40001
+     * ("could not serialize access due to concurrent update"). This is expected
+     * behaviour and should be retried with exponential backoff + jitter.
+     * Prisma surfaces this as error code P2034.
+     */
+    async createTransactionWithRetry(
+        params: CreateTransactionParams,
+        maxAttempts = 10,
+    ): Promise<TransactionResult> {
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                return await this.createTransactionWithLock(params);
+            } catch (error) {
+                const isSerializationFailure =
+                    error?.code === 'P2034' ||
+                    error?.message?.includes('could not serialize access');
+
+                if (isSerializationFailure && attempt < maxAttempts) {
+                    // Exponential backoff: 100ms, 200ms, 400ms … with ±50ms jitter
+                    const backoff = Math.pow(2, attempt - 1) * 100 + Math.random() * 50;
+                    this.logger.warn(
+                        `Serialization failure (attempt ${attempt}/${maxAttempts}), retrying in ${Math.round(backoff)}ms…`,
+                    );
+                    await new Promise((resolve) => setTimeout(resolve, backoff));
+                    continue;
+                }
+
+                throw error;
+            }
+        }
+        throw new Error('Unreachable: retry loop exhausted without throw');
+    }
+
+    /**
      * Find transactions by user with optional type filter
      */
     async findByUser(
@@ -128,9 +204,7 @@ export class TransactionsRepository {
                 userId,
                 ...(type && { type }),
             },
-            orderBy: {
-                createdAt: 'desc',
-            },
+            orderBy: { createdAt: 'desc' },
         });
 
         return transactions.map((t) => ({
@@ -147,6 +221,7 @@ export class TransactionsRepository {
      * Falls back to calculation if account doesn't exist
      */
     async getBalance(userId: string): Promise<number> {
+        // Try the account table first (fast path)
         const account = await this.prisma.account.findUnique({
             where: { userId },
             select: { balance: true },
@@ -156,36 +231,27 @@ export class TransactionsRepository {
             return account.balance;
         }
 
-        // Fallback: Calculate from transaction history if account doesn't exist
-        const aggregation = await this.prisma.transaction.aggregate({
+        // Fallback: compute from transaction history
+        const aggregation = await this.prisma.transaction.groupBy({
+            by: ['type'],
             where: { userId },
-            _sum: {
-                amount: true,
-            },
-        });
-
-        // Calculate balance: sum of CREDIT - sum of DEBIT
-        const credits = await this.prisma.transaction.aggregate({
-            where: { userId, type: 'CREDIT' },
             _sum: { amount: true },
         });
 
-        const debits = await this.prisma.transaction.aggregate({
-            where: { userId, type: 'DEBIT' },
-            _sum: { amount: true },
-        });
-
-        const balance = (credits._sum.amount || 0) - (debits._sum.amount || 0);
+        const credits = aggregation.find((a) => a.type === TransactionType.CREDIT)?._sum?.amount ?? 0;
+        const debits = aggregation.find((a) => a.type === TransactionType.DEBIT)?._sum?.amount ?? 0;
+        const balance = credits - debits;
 
         this.logger.debug(
-            `Balance calculated from ledger for user ${userId}: ${balance}`,
+            `Balance computed from transactions for user ${userId}: credits=${credits}, debits=${debits}, balance=${balance}`,
         );
 
         return balance;
     }
 
     /**
-     * Check if idempotency key exists and return cached response
+     * Check if an idempotency key exists and is not expired
+     * @returns The cached response JSON string if found, null otherwise
      */
     async checkIdempotencyKey(key: string): Promise<string | null> {
         const result = await this.prisma.idempotencyKey.findUnique({
@@ -193,22 +259,18 @@ export class TransactionsRepository {
             select: { response: true, expiresAt: true },
         });
 
-        if (!result) {
-            return null;
-        }
+        if (!result) return null;
 
-        // Check if key has expired
+        // Check if key is expired
         if (result.expiresAt < new Date()) {
-            this.logger.debug(`Idempotency key expired: ${key}`);
             return null;
         }
 
-        this.logger.log(`Idempotency key found: ${key}`);
         return result.response;
     }
 
     /**
-     * Store idempotency key with response
+     * Store idempotency key with response and TTL
      */
     async storeIdempotencyKey(
         key: string,
@@ -218,15 +280,18 @@ export class TransactionsRepository {
         const expiresAt = new Date();
         expiresAt.setHours(expiresAt.getHours() + ttlHours);
 
-        await this.prisma.idempotencyKey.create({
-            data: {
+        await this.prisma.idempotencyKey.upsert({
+            where: { key },
+            create: {
                 key,
                 response: JSON.stringify(response),
                 expiresAt,
             },
+            update: {
+                response: JSON.stringify(response),
+                expiresAt,
+            },
         });
-
-        this.logger.debug(`Stored idempotency key: ${key}, expires: ${expiresAt}`);
     }
 
     /**
@@ -235,9 +300,7 @@ export class TransactionsRepository {
     async cleanupExpiredKeys(): Promise<number> {
         const result = await this.prisma.idempotencyKey.deleteMany({
             where: {
-                expiresAt: {
-                    lt: new Date(),
-                },
+                expiresAt: { lt: new Date() },
             },
         });
 

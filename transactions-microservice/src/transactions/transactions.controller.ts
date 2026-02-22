@@ -53,10 +53,7 @@ export class TransactionsController {
             `Creating transaction for user ${userId}: type=${dto.type}, amount=${dto.amount}, idempotencyKey=${idempotencyKey || 'none'}`,
         );
 
-        // Override user_id from JWT token (security: prevent users from creating transactions for others)
-        dto.user_id = userId;
-
-        return this.transactionsService.createTransaction(dto, idempotencyKey);
+        return this.transactionsService.createTransaction(dto, userId, idempotencyKey);
     }
 
     @Get('transactions')

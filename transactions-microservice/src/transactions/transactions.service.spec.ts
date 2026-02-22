@@ -11,16 +11,16 @@ import {
   InvalidAmountException,
 } from './exceptions';
 
+const USER_ID = 'user123';
+
 describe('TransactionsService', () => {
   let service: TransactionsService;
   let repository: jest.Mocked<TransactionsRepository>;
 
   const mockRepository = {
-    createTransactionWithLock: jest.fn(),
+    createTransactionWithRetry: jest.fn(),
     findByUser: jest.fn(),
     getBalance: jest.fn(),
-    checkIdempotencyKey: jest.fn(),
-    storeIdempotencyKey: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -44,59 +44,53 @@ describe('TransactionsService', () => {
   describe('createTransaction', () => {
     it('should create a CREDIT transaction successfully', async () => {
       const dto: CreateTransactionDto = {
-        user_id: 'user123',
         type: TransactionType.CREDIT,
         amount: 1000,
       };
 
       const mockTransaction = {
         id: 'tx123',
-        userId: 'user123',
+        userId: USER_ID,
         type: TransactionType.CREDIT,
         amount: 1000,
         createdAt: new Date(),
       };
 
-      repository.checkIdempotencyKey.mockResolvedValue(null);
-      repository.createTransactionWithLock.mockResolvedValue(mockTransaction);
-      repository.storeIdempotencyKey.mockResolvedValue(undefined);
+      repository.createTransactionWithRetry.mockResolvedValue(mockTransaction);
 
-      const result = await service.createTransaction(dto, 'key123');
+      const result = await service.createTransaction(dto, USER_ID, 'key123');
 
       expect(result).toEqual({
         id: 'tx123',
-        user_id: 'user123',
+        user_id: USER_ID,
         amount: 1000,
         type: TransactionType.CREDIT,
       });
-      expect(repository.createTransactionWithLock).toHaveBeenCalledWith({
-        userId: 'user123',
+      expect(repository.createTransactionWithRetry).toHaveBeenCalledWith({
+        userId: USER_ID,
         type: TransactionType.CREDIT,
         amount: 1000,
         idempotencyKey: 'key123',
       });
-      expect(repository.storeIdempotencyKey).toHaveBeenCalled();
     });
 
     it('should create a DEBIT transaction with sufficient balance', async () => {
       const dto: CreateTransactionDto = {
-        user_id: 'user123',
         type: TransactionType.DEBIT,
         amount: 500,
       };
 
       const mockTransaction = {
         id: 'tx456',
-        userId: 'user123',
+        userId: USER_ID,
         type: TransactionType.DEBIT,
         amount: 500,
         createdAt: new Date(),
       };
 
-      repository.checkIdempotencyKey.mockResolvedValue(null);
-      repository.createTransactionWithLock.mockResolvedValue(mockTransaction);
+      repository.createTransactionWithRetry.mockResolvedValue(mockTransaction);
 
-      const result = await service.createTransaction(dto);
+      const result = await service.createTransaction(dto, USER_ID);
 
       expect(result.amount).toBe(500);
       expect(result.type).toBe(TransactionType.DEBIT);
@@ -104,68 +98,65 @@ describe('TransactionsService', () => {
 
     it('should reject DEBIT with insufficient balance', async () => {
       const dto: CreateTransactionDto = {
-        user_id: 'user123',
         type: TransactionType.DEBIT,
         amount: 1500,
       };
 
-      repository.checkIdempotencyKey.mockResolvedValue(null);
-      repository.createTransactionWithLock.mockRejectedValue(
+      repository.createTransactionWithRetry.mockRejectedValue(
         new Error('INSUFFICIENT_BALANCE'),
       );
       repository.getBalance.mockResolvedValue(1000);
 
-      await expect(service.createTransaction(dto)).rejects.toThrow(
+      await expect(service.createTransaction(dto, USER_ID)).rejects.toThrow(
         InsufficientBalanceException,
       );
     });
 
     it('should return cached response for duplicate idempotency key', async () => {
       const dto: CreateTransactionDto = {
-        user_id: 'user123',
         type: TransactionType.CREDIT,
         amount: 1000,
       };
 
       const cachedResponse = {
         id: 'tx123',
-        user_id: 'user123',
+        user_id: USER_ID,
         amount: 1000,
         type: TransactionType.CREDIT,
       };
 
-      repository.checkIdempotencyKey.mockResolvedValue(
-        JSON.stringify(cachedResponse),
-      );
+      // The repository now throws IDEMPOTENCY_DUPLICATE from inside the tx
+      const dupError = Object.assign(new Error('IDEMPOTENCY_DUPLICATE'), {
+        cachedResponse: JSON.stringify(cachedResponse),
+      });
+      repository.createTransactionWithRetry.mockRejectedValue(dupError);
 
       await expect(
-        service.createTransaction(dto, 'duplicate-key'),
+        service.createTransaction(dto, USER_ID, 'duplicate-key'),
       ).rejects.toThrow(DuplicateTransactionException);
 
-      // Should not create a new transaction
-      expect(repository.createTransactionWithLock).not.toHaveBeenCalled();
+      // createTransaction was called (it delegates idempotency to the repo)
+      expect(repository.createTransactionWithRetry).toHaveBeenCalled();
     });
 
     it('should reject invalid amount (zero)', async () => {
       const dto: CreateTransactionDto = {
-        user_id: 'user123',
         type: TransactionType.CREDIT,
         amount: 0,
       };
 
-      await expect(service.createTransaction(dto)).rejects.toThrow(
+      await expect(service.createTransaction(dto, USER_ID)).rejects.toThrow(
         InvalidAmountException,
       );
     });
 
     it('should reject invalid amount (negative)', async () => {
       const dto: CreateTransactionDto = {
-        user_id: 'user123',
         type: TransactionType.CREDIT,
         amount: -100,
       };
 
-      await expect(service.createTransaction(dto)).rejects.toThrow(
+      await expect(service.createTransaction(dto, USER_ID)).rejects.toThrow(
         InvalidAmountException,
       );
     });
@@ -176,14 +167,14 @@ describe('TransactionsService', () => {
       const mockTransactions = [
         {
           id: 'tx1',
-          userId: 'user123',
+          userId: USER_ID,
           type: TransactionType.CREDIT,
           amount: 1000,
           createdAt: new Date(),
         },
         {
           id: 'tx2',
-          userId: 'user123',
+          userId: USER_ID,
           type: TransactionType.DEBIT,
           amount: 500,
           createdAt: new Date(),
@@ -192,7 +183,7 @@ describe('TransactionsService', () => {
 
       repository.findByUser.mockResolvedValue(mockTransactions);
 
-      const result = await service.getTransactions('user123');
+      const result = await service.getTransactions(USER_ID);
 
       expect(result).toHaveLength(2);
       expect(result[0].type).toBe(TransactionType.CREDIT);
@@ -203,7 +194,7 @@ describe('TransactionsService', () => {
       const mockTransactions = [
         {
           id: 'tx1',
-          userId: 'user123',
+          userId: USER_ID,
           type: TransactionType.CREDIT,
           amount: 1000,
           createdAt: new Date(),
@@ -213,14 +204,14 @@ describe('TransactionsService', () => {
       repository.findByUser.mockResolvedValue(mockTransactions);
 
       const result = await service.getTransactions(
-        'user123',
+        USER_ID,
         TransactionType.CREDIT,
       );
 
       expect(result).toHaveLength(1);
       expect(result[0].type).toBe(TransactionType.CREDIT);
       expect(repository.findByUser).toHaveBeenCalledWith(
-        'user123',
+        USER_ID,
         TransactionType.CREDIT,
       );
     });
@@ -230,7 +221,7 @@ describe('TransactionsService', () => {
     it('should return current balance', async () => {
       repository.getBalance.mockResolvedValue(1500);
 
-      const result = await service.getBalance('user123');
+      const result = await service.getBalance(USER_ID);
 
       expect(result.amount).toBe(1500);
     });
